@@ -1,0 +1,29 @@
+# Template for households.toml — copy to households.toml and fill in real values.
+# households.toml is gitignored (contains personal data).
+
+[site]
+landlord_name    = "Your Building Management Name"
+landlord_address = "Building Address, London POSTCODE"
+
+# Add one [chargers.SERIAL] block per charger.
+# The serial is the Easee charger ID (e.g. ECL28GR3).
+
+[chargers.ECL28GR3]
+bay           = "Bay 10"
+tenant_name   = "Jane Smith"
+tenant_address = """\
+Flat 10
+307 Upper Richmond Rd
+London SW15 6SS"""
+tenant_email  = "jane.smith@example.com"   # leave blank ("") if not needed
+assigned_from = "2026-06-01"               # YYYY-MM-DD
+
+# [chargers.ECL28GR4]
+# bay           = "Bay 11"
+# tenant_name   = "John Doe"
+# tenant_address = """\
+# Flat 11
+# 307 Upper Richmond Rd
+# London SW15 6SS"""
+# tenant_email  = ""
+# assigned_from = "2026-07-01"

@@ -20,7 +20,8 @@ htmlcov/
 .coverage
 *.cover
 
-# Generated statements (contain personal data — store separately)
+# Personal data — never commit
+households.toml
 statements/
 
 # Database files

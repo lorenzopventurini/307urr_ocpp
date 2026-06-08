@@ -21,6 +21,7 @@ from ocpp_garage.adapters.easee.client import EaseeClient
 from ocpp_garage.billing.engine import BillingEngine
 from ocpp_garage.billing.pdf import generate_pdf
 from ocpp_garage.config import settings
+from ocpp_garage.households import load as load_households
 from ocpp_garage.tariff.flat import FlatRateTariffProvider
 
 
@@ -43,16 +44,22 @@ def main() -> None:
         interval_minutes=settings.tariff_interval_minutes,
     )
 
-    print(f"Generating statement for {settings.easee_charger_serial} — {year}/{month:02d} ...")
+    site = load_households()
+    serial = settings.easee_charger_serial
+    household = site.get_household(serial)
+
+    print(f"Generating statement for {serial} ({household.tenant_name}) — {year}/{month:02d} ...")
 
     with EaseeClient(settings.easee_username, settings.easee_password) as client:
         engine = BillingEngine(client, tariff)
         bill = engine.generate_bill(
-            charger_serial=settings.easee_charger_serial,
-            household_name="Bay 10 Resident",       # TODO: pull from household DB
-            household_address="307 Upper Richmond Rd\nLondon SW15 6SS",
+            charger_serial=serial,
+            household_name=household.tenant_name,
+            household_address=household.tenant_address,
             year=year,
             month=month,
+            landlord_name=site.landlord_name,
+            landlord_address=site.landlord_address,
         )
 
     print(f"  Total energy : {bill.total_kwh:.3f} kWh")
