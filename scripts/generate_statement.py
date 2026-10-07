@@ -2,78 +2,26 @@
 Generate a PDF statement for a charger/household for a given month.
 
 Usage:
-    python scripts/generate_statement.py [YEAR] [MONTH]
+    python scripts/generate_statement.py              # interactive, or default period
+    python scripts/generate_statement.py 2026-07
+    python scripts/generate_statement.py 2026 7
 
-Defaults to the previous calendar month if no arguments given.
-Output is written to statements/<charger>_<YYYY>_<MM>.pdf
+Defaults to the current month, or the previous one during the first days of a
+new month. Output is written to statements/<charger>_<YYYY>_<MM>.pdf
+
+This file is also the entry point for the frozen Windows build — see
+statement.spec and scripts/build_exe.ps1. All the logic lives in
+ocpp_garage.statement_cli so both paths behave identically.
 """
 
 import sys
-from datetime import date
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+# Running from source: make src/ importable. When frozen, the package is bundled.
+if not getattr(sys, "frozen", False):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from dotenv import load_dotenv
-load_dotenv()
-
-from ocpp_garage.adapters.easee.client import EaseeClient
-from ocpp_garage.billing.engine import BillingEngine
-from ocpp_garage.billing.pdf import generate_pdf
-from ocpp_garage.config import settings
-from ocpp_garage.households import load as load_households
-from ocpp_garage.tariff.flat import FlatRateTariffProvider
-
-
-def main() -> None:
-    today = date.today()
-
-    if len(sys.argv) == 3:
-        year, month = int(sys.argv[1]), int(sys.argv[2])
-    else:
-        # Default to current month (or previous if before the 5th)
-        if today.day < 5:
-            first = today.replace(day=1)
-            prev = first.replace(day=1) - __import__("datetime").timedelta(days=1)
-            year, month = prev.year, prev.month
-        else:
-            year, month = today.year, today.month
-
-    tariff = FlatRateTariffProvider(
-        pence_per_kwh=settings.tariff_flat_price_pence,
-        interval_minutes=settings.tariff_interval_minutes,
-    )
-
-    site = load_households()
-    serial = settings.easee_charger_serial
-    household = site.get_household(serial)
-
-    print(f"Generating statement for {serial} ({household.tenant_name}) — {year}/{month:02d} ...")
-
-    with EaseeClient(settings.easee_username, settings.easee_password) as client:
-        engine = BillingEngine(client, tariff)
-        bill = engine.generate_bill(
-            charger_serial=serial,
-            household_name=household.tenant_name,
-            household_address=household.tenant_address,
-            year=year,
-            month=month,
-            landlord_name=site.landlord_name,
-            landlord_address=site.landlord_address,
-        )
-
-    print(f"  Total energy : {bill.total_kwh:.3f} kWh")
-    print(f"  Total cost   : £{bill.total_cost_pounds:.2f}")
-    print(f"  Line items   : {len(bill.lines)} hours with consumption")
-
-    out_dir = Path("statements")
-    out_dir.mkdir(exist_ok=True)
-    out_path = out_dir / f"{bill.charger_id}_{year}_{month:02d}.pdf"
-
-    pdf_bytes = generate_pdf(bill)
-    out_path.write_bytes(pdf_bytes)
-    print(f"  Saved to     : {out_path}")
-
+from ocpp_garage.statement_cli import main
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

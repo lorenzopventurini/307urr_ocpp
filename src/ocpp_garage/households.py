@@ -24,6 +24,7 @@ class SiteConfig:
     landlord_name: str
     landlord_address: str
     chargers: dict[str, Household]  # keyed by charger serial
+    landlord_email: str = ""        # copied on every statement; comma-separate several
 
     def get_household(self, charger_serial: str) -> Household:
         try:
@@ -70,4 +71,5 @@ def load(path: Path | str | None = None) -> SiteConfig:
         landlord_name=site_raw.get("landlord_name", ""),
         landlord_address=site_raw.get("landlord_address", ""),
         chargers=chargers,
+        landlord_email=site_raw.get("landlord_email", ""),
     )

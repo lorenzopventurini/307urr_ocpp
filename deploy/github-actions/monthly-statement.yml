@@ -1,0 +1,104 @@
+# Monthly EV charging statement — generate and email.
+#
+# THIS FILE BELONGS IN A SEPARATE PRIVATE REPOSITORY, at
+#   .github/workflows/monthly-statement.yml
+# not in the public code repository. It checks out the public code at run time,
+# so the billing logic stays publicly auditable while run logs, statements and
+# credentials stay private. (Scheduled workflows in a public repo would also be
+# switched off by GitHub after 60 days without a commit.)
+#
+# Setup checklist: see "Automated monthly email" in the public repo's README.
+
+name: Monthly EV charging statement
+
+on:
+  schedule:
+    # 06:17 UTC on the 2nd: gives Easee a day to finalise the month's data,
+    # and avoids the top of the hour, when GitHub's scheduler is busiest.
+    - cron: "17 6 2 * *"
+  workflow_dispatch:
+    inputs:
+      period:
+        description: "Month to bill, as YYYY-MM. Leave blank for the previous month."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+# Never let two runs (e.g. a manual re-run during the scheduled one) overlap.
+concurrency:
+  group: monthly-statement
+  cancel-in-progress: false
+
+jobs:
+  statement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out the public billing code
+        uses: actions/checkout@v5
+        with:
+          repository: lorenzopventurini/307urr_ocpp
+          # Pin to a tag or commit with the CODE_REF variable; defaults to main.
+          ref: ${{ vars.CODE_REF || 'main' }}
+          persist-credentials: false
+
+      - name: Record which code version is billing
+        run: echo "Billing code commit $(git rev-parse HEAD)"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: pip install --quiet .
+
+      - name: Write household configuration
+        env:
+          HOUSEHOLDS_TOML: ${{ secrets.HOUSEHOLDS_TOML }}
+        run: |
+          if [ -z "$HOUSEHOLDS_TOML" ]; then
+            echo "::error::The HOUSEHOLDS_TOML secret is not set."
+            exit 1
+          fi
+          printf '%s\n' "$HOUSEHOLDS_TOML" > households.toml
+
+      - name: Generate and email statement
+        env:
+          # The manual-run input goes through an env var, never straight into
+          # the shell script, so it cannot inject commands.
+          PERIOD: ${{ inputs.period }}
+          EASEE_USERNAME: ${{ secrets.EASEE_USERNAME }}
+          EASEE_PASSWORD: ${{ secrets.EASEE_PASSWORD }}
+          EASEE_CHARGER_SERIAL: ${{ secrets.EASEE_CHARGER_SERIAL }}
+          TARIFF_FLAT_PRICE_PENCE: ${{ vars.TARIFF_FLAT_PRICE_PENCE }}
+          TARIFF_INTERVAL_MINUTES: ${{ vars.TARIFF_INTERVAL_MINUTES }}
+          SMTP_HOST: ${{ vars.SMTP_HOST }}
+          SMTP_PORT: ${{ vars.SMTP_PORT }}
+          SMTP_SECURITY: ${{ vars.SMTP_SECURITY }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_FROM: ${{ vars.EMAIL_FROM }}
+          EMAIL_FROM_NAME: ${{ vars.EMAIL_FROM_NAME }}
+          EMAIL_REPLY_TO: ${{ vars.EMAIL_REPLY_TO }}
+          # While set, every email goes ONLY to this address. Delete the
+          # variable to start sending to the tenant and management company.
+          STATEMENT_TEST_RECIPIENT: ${{ vars.STATEMENT_TEST_RECIPIENT }}
+        run: |
+          if [ -n "$PERIOD" ]; then
+            python scripts/generate_statement.py "$PERIOD" --email
+          else
+            python scripts/generate_statement.py --previous-month --email
+          fi
+
+      # A private copy of every statement, kept even if the email step failed.
+      - name: Keep a copy of the statement
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: statement-${{ github.run_id }}
+          path: statements/*.pdf
+          if-no-files-found: ignore
+          retention-days: 90

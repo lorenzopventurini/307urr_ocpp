@@ -4,6 +4,7 @@
 [site]
 landlord_name    = "Your Building Management Name"
 landlord_address = "Building Address, London POSTCODE"
+landlord_email   = "management@example.com"   # copied on every statement; comma-separate several, or ""
 
 # Add one [chargers.SERIAL] block per charger.
 # The serial is the Easee charger ID (e.g. ECL28GR3).
