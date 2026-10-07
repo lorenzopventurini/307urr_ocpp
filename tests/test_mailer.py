@@ -3,7 +3,14 @@ from datetime import datetime, timezone
 import pytest
 
 from ocpp_garage.billing import mailer
-from ocpp_garage.billing.mailer import MailerError, build_message, resolve_recipients, send
+from ocpp_garage.billing.mailer import (
+    LANDLORD,
+    TENANT,
+    MailerError,
+    build_message,
+    plan_deliveries,
+    send,
+)
 from ocpp_garage.billing.models import Bill, BillLine
 
 
@@ -25,74 +32,82 @@ def _bill(lines=None) -> Bill:
     )
 
 
-# ------------------------------------------------------------------ recipients
+def _body(msg) -> str:
+    return msg.get_body(preferencelist=("plain",)).get_content()
 
-def test_tenant_receives_and_management_is_copied():
-    r = resolve_recipients("tenant@example.com", "mgmt@example.com")
-    assert r.to == ["tenant@example.com"]
-    assert r.cc == ["mgmt@example.com"]
-    assert not r.test_mode
+
+def _message(delivery, bill=None, **kw):
+    kw.setdefault("support_email", "help@example.com")
+    return build_message(
+        bill or _bill(), b"%PDF-fake", "ECL28GR3_2026_07.pdf", delivery,
+        sender="statements@example.com", sender_name="EV Statements", bay="Bay 10", **kw,
+    )
+
+
+# ------------------------------------------------------------------ deliveries
+
+def test_tenant_and_management_get_separate_emails():
+    tenant, landlord = plan_deliveries("tenant@example.com", "a@mgmt.com, b@mgmt.com")
+    assert (tenant.role, tenant.to) == (TENANT, ["tenant@example.com"])
+    assert (landlord.role, landlord.to) == (LANDLORD, ["a@mgmt.com", "b@mgmt.com"])
+    assert not tenant.test_mode and not landlord.test_mode
+
+
+def test_only_configured_recipients_get_email():
+    [only] = plan_deliveries("", "mgmt@example.com")
+    assert only.role == LANDLORD      # worded as the management copy, not to the tenant
+    [only] = plan_deliveries("tenant@example.com", "")
+    assert only.role == TENANT
 
 
 def test_test_recipient_overrides_everyone():
-    r = resolve_recipients("tenant@example.com", "a@mgmt.com, b@mgmt.com", "me@example.com")
-    assert r.to == ["me@example.com"]
-    assert r.cc == []
-    assert r.test_mode
-    assert r.intended_to == ["tenant@example.com"]
-    assert r.intended_cc == ["a@mgmt.com", "b@mgmt.com"]
+    deliveries = plan_deliveries("tenant@example.com", "mgmt@example.com", "me@example.com")
+    assert [d.to for d in deliveries] == [["me@example.com"], ["me@example.com"]]
+    assert all(d.test_mode for d in deliveries)
+    assert [d.intended for d in deliveries] == [["tenant@example.com"], ["mgmt@example.com"]]
 
 
-def test_test_mode_works_before_real_addresses_exist():
-    r = resolve_recipients("", "", "me@example.com")
-    assert r.to == ["me@example.com"]
-    assert r.intended_to == [] and r.intended_cc == []
-
-
-def test_management_promoted_when_no_tenant_email():
-    r = resolve_recipients("", "mgmt@example.com")
-    assert r.to == ["mgmt@example.com"]
-    assert r.cc == []
+def test_test_mode_previews_both_versions_before_addresses_exist():
+    deliveries = plan_deliveries("", "", "me@example.com")
+    assert [d.role for d in deliveries] == [TENANT, LANDLORD]
+    assert all(d.intended == [] for d in deliveries)
 
 
 def test_no_recipients_is_an_error():
     with pytest.raises(MailerError, match="No recipients"):
-        resolve_recipients("", "")
+        plan_deliveries("", "")
 
 
 @pytest.mark.parametrize("bad", ["not-an-address", "two words@example.com"])
 def test_malformed_address_rejected(bad):
     with pytest.raises(MailerError, match="not a valid email"):
-        resolve_recipients(bad, "")
+        plan_deliveries(bad, "")
 
 
 def test_test_recipient_must_be_single():
     with pytest.raises(MailerError, match="single address"):
-        resolve_recipients("t@example.com", "", "a@example.com, b@example.com")
+        plan_deliveries("t@example.com", "", "a@example.com, b@example.com")
 
 
 # ------------------------------------------------------------------ message
 
-def test_live_message_headers_body_and_attachment():
-    r = resolve_recipients("tenant@example.com", "mgmt@example.com")
-    msg = build_message(
-        _bill(), b"%PDF-fake", "ECL28GR3_2026_07.pdf", r,
-        sender="statements@example.com", sender_name="EV Statements", bay="Bay 10",
-        reply_to="mgmt@example.com",
-    )
+def test_tenant_email():
+    [tenant, _] = plan_deliveries("tenant@example.com", "mgmt@example.com")
+    msg = _message(tenant)
 
     assert msg["Subject"] == "EV charging statement - July 2026 - Bay 10"
     assert msg["From"] == "EV Statements <statements@example.com>"
     assert msg["To"] == "tenant@example.com"
-    assert msg["Cc"] == "mgmt@example.com"
-    assert msg["Reply-To"] == "mgmt@example.com"
+    assert msg["Cc"] is None
     assert msg["Date"] and msg["Message-ID"].endswith("@example.com>")
 
-    body = msg.get_body(preferencelist=("plain",)).get_content()
-    assert "Dear Jane Smith," in body
+    body = _body(msg)
+    assert body.startswith("Dear Jane Smith,")
+    assert "your EV charging statement for July 2026" in body
     assert "14.50 kWh" in body
     assert "25.0p per kWh" in body
     assert "£3.62" in body          # 14.5 kWh x 25p = 362.5p
+    assert "sent on behalf of Test Management" in body
     assert "TEST" not in body
 
     [attachment] = list(msg.iter_attachments())
@@ -101,22 +116,62 @@ def test_live_message_headers_body_and_attachment():
     assert attachment.get_content() == b"%PDF-fake"
 
 
-def test_test_message_is_labelled_and_names_intended_recipients():
-    r = resolve_recipients("tenant@example.com", "mgmt@example.com", "me@example.com")
-    msg = build_message(_bill(), b"%PDF", "s.pdf", r, "from@example.com", "EV")
+def test_management_copy_is_addressed_to_management():
+    [_, landlord] = plan_deliveries("tenant@example.com", "mgmt@example.com")
+    msg = _message(landlord)
 
-    assert msg["Subject"].startswith("[TEST] ")
-    assert msg["To"] == "me@example.com"
-    assert msg["Cc"] is None
-    body = msg.get_body(preferencelist=("plain",)).get_content()
-    assert "To: tenant@example.com" in body
-    assert "Cc: mgmt@example.com" in body
+    assert msg["Subject"] == "EV charging statement - July 2026 - Bay 10 (copy)"
+    assert msg["To"] == "mgmt@example.com"
+    body = _body(msg)
+    assert body.startswith("Dear Test Management,")
+    assert "Dear Jane Smith" not in body
+    assert "a copy of the EV charging statement for July 2026 issued to Jane Smith" in body
+    assert "automated copy for your records" in body
+    assert len(list(msg.iter_attachments())) == 1
+
+
+def test_questions_go_to_support_email_and_there_is_no_signature():
+    [tenant] = plan_deliveries("tenant@example.com", "")
+    body = _body(_message(tenant, support_email="help@example.com"))
+    assert body.rstrip().endswith(
+        "If you have any questions about this statement, please contact help@example.com."
+    )
+    assert "Somewhere, London" not in body      # landlord address signature removed
+
+
+def test_without_support_email_questions_go_to_landlord():
+    [tenant] = plan_deliveries("tenant@example.com", "")
+    body = _body(_message(tenant, support_email=""))
+    assert "please contact Test Management." in body
+
+
+def test_reply_to_is_support_email_unless_overridden():
+    [tenant] = plan_deliveries("tenant@example.com", "")
+    assert _message(tenant, support_email="help@example.com")["Reply-To"] == "help@example.com"
+    msg = _message(tenant, support_email="help@example.com", reply_to="other@example.com")
+    assert msg["Reply-To"] == "other@example.com"
+    assert _message(tenant, support_email="")["Reply-To"] is None
+
+
+def test_test_emails_are_labelled_with_role_and_intended_recipient():
+    tenant, landlord = plan_deliveries("tenant@example.com", "mgmt@example.com", "me@example.com")
+
+    t = _message(tenant)
+    assert t["Subject"].startswith("[TEST] ")
+    assert t["To"] == "me@example.com"
+    assert "TEST MESSAGE (tenant statement)" in _body(t)
+    assert "  tenant@example.com" in _body(t)
+
+    m = _message(landlord)
+    assert m["Subject"] == "[TEST] EV charging statement - July 2026 - Bay 10 (copy)"
+    assert m["To"] == "me@example.com"
+    assert "TEST MESSAGE (management company copy)" in _body(m)
+    assert "  mgmt@example.com" in _body(m)
 
 
 def test_zero_usage_month_says_nothing_is_due():
-    r = resolve_recipients("t@example.com", "")
-    msg = build_message(_bill(lines=[]), b"%PDF", "s.pdf", r, "f@example.com", "EV")
-    body = msg.get_body(preferencelist=("plain",)).get_content()
+    [tenant] = plan_deliveries("t@example.com", "")
+    body = _body(_message(tenant, bill=_bill(lines=[])))
     assert "£0.00" in body
     assert "nothing is due" in body
     assert "per kWh" not in body     # no rate to quote without any lines
@@ -126,6 +181,7 @@ def test_zero_usage_month_says_nothing_is_due():
 
 class _FakeSMTP:
     instances: list["_FakeSMTP"] = []
+    fail_on_send: int | None = None
 
     def __init__(self, host, port, timeout=None, context=None):
         self.calls = []
@@ -144,28 +200,38 @@ class _FakeSMTP:
         self.calls.append("login")
 
     def send_message(self, msg):
+        if self.calls.count("send") == _FakeSMTP.fail_on_send:
+            raise mailer.smtplib.SMTPDataError(554, b"rejected")
         self.calls.append("send")
 
 
 @pytest.fixture
 def fake_smtp(monkeypatch):
     _FakeSMTP.instances.clear()
+    _FakeSMTP.fail_on_send = None
     monkeypatch.setattr(mailer.smtplib, "SMTP", _FakeSMTP)
     monkeypatch.setattr(mailer.smtplib, "SMTP_SSL", _FakeSMTP)
     return _FakeSMTP
 
 
 def test_starttls_happens_before_the_password_is_sent(fake_smtp):
-    send(object(), "smtp.example.com", 587, "u", "p", security="starttls")
-    assert fake_smtp.instances[0].calls == ["starttls", "login", "send"]
+    send([object(), object()], "smtp.example.com", 587, "u", "p", security="starttls")
+    [conn] = fake_smtp.instances        # both messages over one connection
+    assert conn.calls == ["starttls", "login", "send", "send"]
 
 
 def test_implicit_ssl_needs_no_starttls(fake_smtp):
-    send(object(), "smtp.example.com", 465, "u", "p", security="ssl")
+    send([object()], "smtp.example.com", 465, "u", "p", security="ssl")
     assert fake_smtp.instances[0].calls == ["login", "send"]
 
 
 def test_plaintext_smtp_is_refused(fake_smtp):
     with pytest.raises(MailerError, match="starttls' or 'ssl'"):
-        send(object(), "smtp.example.com", 25, "u", "p", security="none")
+        send([object()], "smtp.example.com", 25, "u", "p", security="none")
     assert fake_smtp.instances == []
+
+
+def test_partial_failure_reports_what_was_already_sent(fake_smtp):
+    fake_smtp.fail_on_send = 1          # first email goes, second is rejected
+    with pytest.raises(MailerError, match="1 of 2 emails had already been sent"):
+        send([object(), object()], "smtp.example.com", 587, "u", "p")

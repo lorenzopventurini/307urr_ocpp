@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ocpp_garage.billing.mailer import Recipients
+    from ocpp_garage.billing.mailer import Delivery
     from ocpp_garage.billing.models import Bill
     from ocpp_garage.households import Household, SiteConfig
 
@@ -253,12 +253,12 @@ def generate(year: int, month: int, base: Path, settings, site, household) -> St
     return Statement(bill=bill, pdf_bytes=pdf_bytes, path=out_path)
 
 
-def prepare_email(settings, site, household) -> "Recipients":
+def prepare_email(settings, site, household) -> list["Delivery"]:
     """
     Check the email settings and work out recipients BEFORE contacting Easee,
     so a misconfiguration fails in seconds rather than after the slow part.
     """
-    from ocpp_garage.billing.mailer import MailerError, resolve_recipients
+    from ocpp_garage.billing.mailer import MailerError, plan_deliveries
 
     missing = [
         name for name, value in (
@@ -271,7 +271,7 @@ def prepare_email(settings, site, household) -> "Recipients":
         raise StatementError(f"Cannot send email - missing settings: {', '.join(missing)}")
 
     try:
-        return resolve_recipients(
+        return plan_deliveries(
             tenant_email=household.tenant_email,
             landlord_email=site.landlord_email,
             test_recipient=settings.statement_test_recipient,
@@ -280,24 +280,30 @@ def prepare_email(settings, site, household) -> "Recipients":
         raise StatementError(str(exc))
 
 
-def email_statement(statement: Statement, recipients: "Recipients", settings, household) -> None:
-    from ocpp_garage.billing.mailer import MailerError, build_message, send
+def email_statement(
+    statement: Statement, deliveries: list["Delivery"], settings, site, household
+) -> None:
+    from ocpp_garage.billing.mailer import LANDLORD, MailerError, build_message, send
 
-    msg = build_message(
-        bill=statement.bill,
-        pdf_bytes=statement.pdf_bytes,
-        pdf_filename=statement.path.name,
-        recipients=recipients,
-        sender=settings.email_from or settings.smtp_username,
-        sender_name=settings.email_from_name,
-        bay=household.bay,
-        reply_to=settings.email_reply_to,
-    )
+    messages = [
+        build_message(
+            bill=statement.bill,
+            pdf_bytes=statement.pdf_bytes,
+            pdf_filename=statement.path.name,
+            delivery=delivery,
+            sender=settings.email_from or settings.smtp_username,
+            sender_name=settings.email_from_name,
+            bay=household.bay,
+            reply_to=settings.email_reply_to,
+            support_email=site.support_email,
+        )
+        for delivery in deliveries
+    ]
 
     print("\nSending email ...")
     try:
         send(
-            msg,
+            messages,
             host=settings.smtp_host,
             port=settings.smtp_port,
             username=settings.smtp_username,
@@ -307,13 +313,11 @@ def email_statement(statement: Statement, recipients: "Recipients", settings, ho
     except MailerError as exc:
         raise StatementError(str(exc))
 
-    if recipients.test_mode:
-        print(f"  TEST MODE - sent only to {_redact(recipients.to[0])}")
-        print("  (clear STATEMENT_TEST_RECIPIENT to send to the real recipients)")
-    else:
-        print(f"  To : {_redact(', '.join(recipients.to))}")
-        if recipients.cc:
-            print(f"  Cc : {_redact(', '.join(recipients.cc))}")
+    for delivery in deliveries:
+        label = "Management copy" if delivery.role == LANDLORD else "Tenant statement"
+        print(f"  {label:<17}: {_redact(', '.join(delivery.to))}")
+    if deliveries[0].test_mode:
+        print("  TEST MODE - sent only to the test address, not the real recipients.")
     print("  Sent.")
 
 
@@ -368,12 +372,12 @@ def main(argv: list[str] | None = None) -> int:
         _bootstrap_env(base)
         settings = _load_settings()
         site, household = load_household(base, settings)
-        recipients = prepare_email(settings, site, household) if args.email else None
+        deliveries = prepare_email(settings, site, household) if args.email else None
         year, month = _resolve_period(args)
 
         statement = generate(year, month, base, settings, site, household)
-        if recipients is not None:
-            email_statement(statement, recipients, settings, household)
+        if deliveries is not None:
+            email_statement(statement, deliveries, settings, site, household)
     except StatementError as exc:
         print(f"\nERROR: {exc}", file=sys.stderr)
         _pause()

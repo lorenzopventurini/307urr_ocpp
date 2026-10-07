@@ -46,9 +46,11 @@ uv run python scripts/generate_statement.py 2026 7
 Writes `statements/<charger>_<YYYY>_<MM>.pdf`. With no argument it offers the
 current month, or the previous one during the first days of a new month.
 
-Add `--email` to send it to the tenant (`tenant_email` in `households.toml`),
-copying the management company (`landlord_email`). `--previous-month` bills the
-last complete calendar month, as the scheduled run does.
+Add `--email` to email it to the tenant (`tenant_email` in `households.toml`)
+and, as a separate email worded as a copy, to the management company
+(`landlord_email`). Questions are directed to `support_email`, which is also the
+Reply-To address. `--previous-month` bills the last complete calendar month, as
+the scheduled run does.
 
 ## Automated monthly email
 
@@ -89,20 +91,23 @@ public.
    | `STATEMENT_TEST_RECIPIENT` | your own address; keep it set |
    | `LIVE` | `true` once going live (see below) |
    | `EMAIL_FROM_NAME` | optional, display name on the email |
-   | `EMAIL_REPLY_TO` | optional, e.g. the management company's address |
+   | `EMAIL_REPLY_TO` | optional, overrides `support_email` as the Reply-To |
    | `CODE_REF` | optional, tag or commit of this repo to bill with (default `main`) |
 
 5. **Test.** Actions → *Monthly EV charging statement* → *Run workflow*, with
-   delivery `test`. The email goes **only** to `STATEMENT_TEST_RECIPIENT`,
-   marked `[TEST]` and listing who it would have gone to. In Gmail, open it,
-   choose *Show original*, and check SPF, DKIM and DMARC all say `PASS`.
-6. **Go live.** Add `tenant_email` and `landlord_email` to `households.toml`,
-   update the `HOUSEHOLDS_TOML` secret, then set the `LIVE` variable to `true`.
+   delivery `test`. Both versions (tenant statement and management copy) go
+   **only** to `STATEMENT_TEST_RECIPIENT`, marked `[TEST]` and listing who each
+   would have gone to. In Gmail, open one, choose *Show original*, and check
+   SPF, DKIM and DMARC all say `PASS`.
+6. **Go live.** Add `tenant_email`, `landlord_email` and `support_email` to
+   `households.toml`, update the `HOUSEHOLDS_TOML` secret, then set the `LIVE`
+   variable to `true`.
 
 ### Who receives it
 
-Scheduled runs send to the tenant (copying the management company) when `LIVE`
-is `true`, and to the test address otherwise. Manual runs have a *delivery*
+Scheduled runs send the tenant their statement and the management company a
+copy (two separate emails) when `LIVE` is `true`, and send both to the test
+address otherwise. Manual runs have a *delivery*
 option: `test` (the default) or `production`. Manual runs also take several
 months at once (`2026-07, 2026-08`) for catching up after an outage; the list
 is checked before anything is sent. The private repo's README covers outages,

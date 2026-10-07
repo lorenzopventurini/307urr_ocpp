@@ -50,8 +50,10 @@ def test_email_misconfiguration_fails_before_any_work():
 
 
 def test_prepare_email_honours_test_recipient():
-    r = cli.prepare_email(_settings(statement_test_recipient="me@example.com"), SITE, HOUSEHOLD)
-    assert r.to == ["me@example.com"] and r.test_mode
+    deliveries = cli.prepare_email(
+        _settings(statement_test_recipient="me@example.com"), SITE, HOUSEHOLD
+    )
+    assert all(d.to == ["me@example.com"] and d.test_mode for d in deliveries)
 
 
 def test_names_redacted_only_in_ci(monkeypatch):

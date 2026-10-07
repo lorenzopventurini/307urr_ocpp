@@ -24,7 +24,8 @@ class SiteConfig:
     landlord_name: str
     landlord_address: str
     chargers: dict[str, Household]  # keyed by charger serial
-    landlord_email: str = ""        # copied on every statement; comma-separate several
+    landlord_email: str = ""        # sent a copy of every statement; comma-separate several
+    support_email: str = ""         # where questions go; named in the email and used as Reply-To
 
     def get_household(self, charger_serial: str) -> Household:
         try:
@@ -72,4 +73,5 @@ def load(path: Path | str | None = None) -> SiteConfig:
         landlord_address=site_raw.get("landlord_address", ""),
         chargers=chargers,
         landlord_email=site_raw.get("landlord_email", ""),
+        support_email=site_raw.get("support_email", ""),
     )

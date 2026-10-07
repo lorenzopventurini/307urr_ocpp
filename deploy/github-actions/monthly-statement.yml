@@ -12,7 +12,7 @@
 #   Manual runs     whatever the "delivery" option says; test unless you pick
 #                   production. Use these for outages and backlogs.
 #   Test            only the STATEMENT_TEST_RECIPIENT address, marked [TEST].
-#   Production      the tenant, copying the management company.
+#   Production      the tenant, and a separate copy to the management company.
 #
 # Setup checklist: see "Automated monthly email" in the public repo's README.
 
@@ -32,7 +32,7 @@ on:
         required: false
         default: ""
       delivery:
-        description: "test = only the test address; production = tenant and management company"
+        description: "test = only the test address; production = tenant and management company (separate emails)"
         type: choice
         options:
           - test
