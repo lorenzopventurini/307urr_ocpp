@@ -33,7 +33,9 @@ concurrency:
 
 jobs:
   statement:
-    runs-on: ubuntu-latest
+    # Pinned rather than ubuntu-latest so the OS only changes when we choose to,
+    # not silently between a tested run and a live billing run.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
 
     steps:
@@ -96,7 +98,7 @@ jobs:
       # A private copy of every statement, kept even if the email step failed.
       - name: Keep a copy of the statement
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: statement-${{ github.run_id }}
           path: statements/*.pdf
