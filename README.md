@@ -86,21 +86,30 @@ public.
    | `SMTP_HOST` | `smtp.gmail.com` |
    | `TARIFF_FLAT_PRICE_PENCE` | `25.0` |
    | `TARIFF_INTERVAL_MINUTES` | `60` |
-   | `STATEMENT_TEST_RECIPIENT` | your own address, while testing |
+   | `STATEMENT_TEST_RECIPIENT` | your own address; keep it set |
+   | `LIVE` | `true` once going live (see below) |
    | `EMAIL_FROM_NAME` | optional, display name on the email |
    | `EMAIL_REPLY_TO` | optional, e.g. the management company's address |
    | `CODE_REF` | optional, tag or commit of this repo to bill with (default `main`) |
 
-5. **Test.** Actions → *Monthly EV charging statement* → *Run workflow*. While
-   `STATEMENT_TEST_RECIPIENT` is set, the email goes **only** there, marked
-   `[TEST]` and listing who it would have gone to. In Gmail, open it, choose
-   *Show original*, and check SPF, DKIM and DMARC all say `PASS`.
+5. **Test.** Actions → *Monthly EV charging statement* → *Run workflow*, with
+   delivery `test`. The email goes **only** to `STATEMENT_TEST_RECIPIENT`,
+   marked `[TEST]` and listing who it would have gone to. In Gmail, open it,
+   choose *Show original*, and check SPF, DKIM and DMARC all say `PASS`.
 6. **Go live.** Add `tenant_email` and `landlord_email` to `households.toml`,
-   update the `HOUSEHOLDS_TOML` secret, then delete the
-   `STATEMENT_TEST_RECIPIENT` variable.
+   update the `HOUSEHOLDS_TOML` secret, then set the `LIVE` variable to `true`.
+
+### Who receives it
+
+Scheduled runs send to the tenant (copying the management company) when `LIVE`
+is `true`, and to the test address otherwise. Manual runs have a *delivery*
+option: `test` (the default) or `production`. Manual runs also take several
+months at once (`2026-07, 2026-08`) for catching up after an outage; the list
+is checked before anything is sent. The private repo's README covers outages,
+backlogs and avoiding duplicate sends.
 
 If a run fails, GitHub emails the repository owner. Each run also keeps a copy
-of the PDF as a downloadable artifact for 90 days. Re-running a workflow sends
+of the PDFs as a downloadable artifact for 90 days. Re-running a workflow sends
 the email again.
 
 ## Standalone Windows build

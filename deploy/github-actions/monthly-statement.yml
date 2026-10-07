@@ -7,6 +7,13 @@
 # credentials stay private. (Scheduled workflows in a public repo would also be
 # switched off by GitHub after 60 days without a commit.)
 #
+# Who receives the email:
+#   Scheduled runs  production when the LIVE variable is "true", otherwise test.
+#   Manual runs     whatever the "delivery" option says; test unless you pick
+#                   production. Use these for outages and backlogs.
+#   Test            only the STATEMENT_TEST_RECIPIENT address, marked [TEST].
+#   Production      the tenant, copying the management company.
+#
 # Setup checklist: see "Automated monthly email" in the public repo's README.
 
 name: Monthly EV charging statement
@@ -19,14 +26,25 @@ on:
   workflow_dispatch:
     inputs:
       period:
-        description: "Month to bill, as YYYY-MM. Leave blank for the previous month."
+        description: >-
+          Month(s) to bill as YYYY-MM, e.g. 2026-09 or, for a backlog,
+          2026-07, 2026-08, 2026-09 (all in ONE run). Blank = previous month.
         required: false
         default: ""
+      delivery:
+        description: "test = only the test address; production = tenant and management company"
+        type: choice
+        options:
+          - test
+          - production
+        default: test
 
 permissions:
   contents: read
 
-# Never let two runs (e.g. a manual re-run during the scheduled one) overlap.
+# Never let two runs overlap. GitHub keeps only the newest WAITING run in a
+# concurrency group and cancels older waiting ones, so bill a backlog as one
+# run with several months rather than several runs started back to back.
 concurrency:
   group: monthly-statement
   cancel-in-progress: false
@@ -36,7 +54,7 @@ jobs:
     # Pinned rather than ubuntu-latest so the OS only changes when we choose to,
     # not silently between a tested run and a live billing run.
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Check out the public billing code
@@ -67,11 +85,13 @@ jobs:
           fi
           printf '%s\n' "$HOUSEHOLDS_TOML" > households.toml
 
-      - name: Generate and email statement
+      - name: Generate and email statement(s)
         env:
-          # The manual-run input goes through an env var, never straight into
-          # the shell script, so it cannot inject commands.
+          # Manual-run inputs go through env vars, never straight into the
+          # script, so they cannot inject shell commands.
           PERIOD: ${{ inputs.period }}
+          DELIVERY: ${{ github.event_name == 'schedule' && (vars.LIVE == 'true' && 'production' || 'test') || inputs.delivery }}
+          TEST_RECIPIENT: ${{ vars.STATEMENT_TEST_RECIPIENT }}
           EASEE_USERNAME: ${{ secrets.EASEE_USERNAME }}
           EASEE_PASSWORD: ${{ secrets.EASEE_PASSWORD }}
           EASEE_CHARGER_SERIAL: ${{ secrets.EASEE_CHARGER_SERIAL }}
@@ -85,18 +105,62 @@ jobs:
           EMAIL_FROM: ${{ vars.EMAIL_FROM }}
           EMAIL_FROM_NAME: ${{ vars.EMAIL_FROM_NAME }}
           EMAIL_REPLY_TO: ${{ vars.EMAIL_REPLY_TO }}
-          # While set, every email goes ONLY to this address. Delete the
-          # variable to start sending to the tenant and management company.
-          STATEMENT_TEST_RECIPIENT: ${{ vars.STATEMENT_TEST_RECIPIENT }}
         run: |
-          if [ -n "$PERIOD" ]; then
-            python scripts/generate_statement.py "$PERIOD" --email
-          else
+          set -f   # no glob expansion of the period list
+
+          case "$DELIVERY" in
+            production)
+              # Empty = no redirect: the tenant and management company receive it.
+              export STATEMENT_TEST_RECIPIENT=""
+              echo "Delivery: PRODUCTION - tenant and management company"
+              ;;
+            test)
+              # Never let a missing test address fall through to real recipients.
+              if [ -z "$TEST_RECIPIENT" ]; then
+                echo "::error::Test delivery needs the STATEMENT_TEST_RECIPIENT variable."
+                exit 1
+              fi
+              export STATEMENT_TEST_RECIPIENT="$TEST_RECIPIENT"
+              echo "Delivery: TEST - test address only"
+              ;;
+            *)
+              echo "::error::Unknown delivery mode '$DELIVERY'."
+              exit 1
+              ;;
+          esac
+
+          if [ -z "$PERIOD" ]; then
             python scripts/generate_statement.py --previous-month --email
+            exit $?
+          fi
+
+          # One or more months: commas and/or spaces, duplicates dropped,
+          # oldest first. Carry on past a failed month, then fail the run.
+          months=$(printf '%s' "$PERIOD" | tr ', ' '\n\n' | sed '/^$/d' | sort -u)
+
+          # Check the whole list before sending anything: a typo should stop
+          # the run cleanly, not after half a backlog has gone out.
+          for month in $months; do
+            case "$month" in
+              [0-9][0-9][0-9][0-9]-[0-9][0-9]) ;;
+              *) echo "::error::'$month' is not a month in YYYY-MM form. Nothing was sent."
+                 exit 1 ;;
+            esac
+          done
+
+          failed=""
+          for month in $months; do
+            echo "::group::Statement for $month"
+            python scripts/generate_statement.py "$month" --email || failed="$failed $month"
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::Statements FAILED for:$failed (the others were sent)."
+            exit 1
           fi
 
       # A private copy of every statement, kept even if the email step failed.
-      - name: Keep a copy of the statement
+      - name: Keep a copy of the statement(s)
         if: always()
         uses: actions/upload-artifact@v7
         with:
