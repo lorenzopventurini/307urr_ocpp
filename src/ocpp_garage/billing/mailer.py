@@ -36,7 +36,7 @@ class Delivery:
     test_mode: bool
 
 
-def _split(addresses: str) -> list[str]:
+def split_addresses(addresses: str) -> list[str]:
     """'a@x.com, b@y.com' -> ['a@x.com', 'b@y.com'], rejecting anything malformed."""
     result = []
     for raw in addresses.split(","):
@@ -63,11 +63,11 @@ def plan_deliveries(
     reaches the real recipients. Test mode always produces both versions, so
     each can be checked before going live, even with no addresses configured.
     """
-    tenant = _split(tenant_email)
-    landlord = _split(landlord_email)
+    tenant = split_addresses(tenant_email)
+    landlord = split_addresses(landlord_email)
 
     if test_recipient:
-        test = _split(test_recipient)
+        test = split_addresses(test_recipient)
         if len(test) != 1:
             raise MailerError("STATEMENT_TEST_RECIPIENT must be a single address.")
         return [

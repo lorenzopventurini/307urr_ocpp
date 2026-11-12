@@ -5,7 +5,14 @@ Translates Easee API responses into the shared domain types.
 
 from datetime import datetime, timezone
 
-from ..base import ChargerAdapter, ChargerState, ChargerStatus, MeterReading, SessionEvent
+from ..base import (
+    ChargerAdapter,
+    ChargerState,
+    ChargerStatus,
+    ConnectedSession,
+    MeterReading,
+    SessionEvent,
+)
 from .client import EaseeClient
 
 
@@ -22,6 +29,11 @@ _STATUS_MAP: dict[int, ChargerStatus] = {
     7: ChargerStatus.AWAITING_AUTHENTICATION,   # Awaiting Authentication
     8: ChargerStatus.DEAUTHENTICATING,          # De-authenticating
 }
+
+# reasonForNoCurrent values (enumeration 96) meaning the charger is holding off
+# on purpose: 6 = finished, waiting in the "fully charged" queue;
+# 54 = pending scheduled charging; 76 = current limited by schedule.
+_HELD_BY_SCHEDULE = {6, 54, 76}
 
 
 class EaseeAdapter(ChargerAdapter):
@@ -54,6 +66,28 @@ class EaseeAdapter(ChargerAdapter):
             status=status,
             current_amps=current,
             power_kw=power,
+            held_by_charger_schedule=_int_or_none(raw.get("reasonForNoCurrent"))
+            in _HELD_BY_SCHEDULE,
+            status_since_utc=_datetime_or_none(raw.get("chargerOpModeTimestamp")),
+        )
+
+    def get_connected_session(self, charger_id: str) -> ConnectedSession | None:
+        raw = self._client.get_ongoing_session(charger_id)
+        if not raw:
+            return None
+        session_id = raw.get("sessionId")
+        started = _datetime_or_none(raw.get("sessionStart"))
+        # Prefer Easee's session id; fall back to the start time, which is
+        # equally unique per plug-in.
+        if session_id is not None:
+            key: str | None = str(session_id)
+        else:
+            key = started.isoformat() if started else None
+        return ConnectedSession(
+            charger_id=charger_id,
+            session_key=key,
+            started_utc=started,
+            energy_kwh=_float_or_none(raw.get("sessionEnergy")) or 0.0,
         )
 
     def get_meter_reading(self, charger_id: str) -> MeterReading:
@@ -85,3 +119,21 @@ def _float_or_none(v: object) -> float | None:
         return float(v)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
+
+
+def _int_or_none(v: object) -> int | None:
+    try:
+        return int(v)  # type: ignore[call-overload]
+    except (TypeError, ValueError):
+        return None
+
+
+def _datetime_or_none(v: object) -> datetime | None:
+    """Parse an Easee timestamp; one without a zone is taken to be UTC."""
+    if not isinstance(v, str) or not v:
+        return None
+    try:
+        dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)

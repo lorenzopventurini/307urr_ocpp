@@ -13,6 +13,17 @@ EASEE_BASE = "https://api.easee.com"
 # Access tokens expire after 24h; refresh 5 min before expiry to be safe.
 _TOKEN_EXPIRY_BUFFER_SECS = 300
 
+# Observation ids (https://developer.easee.com/docs/charger-observation-ids)
+# read by get_charger_state, under the field names the old state endpoint used.
+STATE_OBSERVATIONS: dict[int, str] = {
+    109: "chargerOpMode",
+    96: "reasonForNoCurrent",
+    121: "sessionEnergy",       # kWh
+    120: "totalPower",          # kW
+    124: "lifetimeEnergy",      # kWh
+    114: "outputCurrent",       # A
+}
+
 
 @dataclass
 class _TokenPair:
@@ -109,8 +120,38 @@ class EaseeClient:
     def get_charger(self, serial: str) -> dict:
         return self.get(f"/api/chargers/{serial}")  # type: ignore[return-value]
 
+    def get_observations(self, serial: str, ids: list[int]) -> list[dict]:
+        """Latest value of each observation: [{id, value, timestamp, dataType}, ...]."""
+        data = self.get(
+            f"/state/{serial}/observations", params={"ids": ",".join(map(str, ids))}
+        )
+        return data.get("observations", []) if isinstance(data, dict) else []  # type: ignore[return-value]
+
     def get_charger_state(self, serial: str) -> dict:
-        return self.get(f"/api/chargers/{serial}/state")  # type: ignore[return-value]
+        """
+        Current charger state, read from the Observations API (the older
+        /api/chargers/{serial}/state endpoint no longer answers). Keyed by the
+        old field names; each also has a "<name>Timestamp" for when it last changed.
+        """
+        state: dict = {}
+        for obs in self.get_observations(serial, list(STATE_OBSERVATIONS)):
+            name = STATE_OBSERVATIONS.get(obs.get("id"))  # type: ignore[arg-type]
+            if name:
+                state[name] = obs.get("value")
+                state[f"{name}Timestamp"] = obs.get("timestamp")
+        return state
+
+    def get_ongoing_session(self, serial: str) -> dict | None:
+        """
+        The session in progress, or None when no car is connected (Easee answers
+        404). Easee allows only 10 calls an hour to this endpoint.
+        """
+        try:
+            return self.get(f"/api/chargers/{serial}/sessions/ongoing")  # type: ignore[return-value]
+        except EaseeApiError as exc:
+            if exc.status_code == 404:
+                return None
+            raise
 
     def get_charger_config(self, serial: str) -> dict:
         return self.get(f"/api/chargers/{serial}/config")  # type: ignore[return-value]

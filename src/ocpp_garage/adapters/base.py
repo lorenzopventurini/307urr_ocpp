@@ -45,6 +45,19 @@ class ChargerState:
     status: ChargerStatus
     current_amps: float | None   # present draw (per-phase average)
     power_kw: float | None
+    # True when the charger itself is deliberately holding off: its own charging
+    # schedule, or the car has finished and is parked in a "fully charged" queue.
+    held_by_charger_schedule: bool = False
+    status_since_utc: datetime | None = None   # when the status last changed, if known
+
+
+@dataclass(frozen=True)
+class ConnectedSession:
+    """The session for the car currently plugged in."""
+    charger_id: str
+    session_key: str | None           # stable per plug-in; None if the backend has none
+    started_utc: datetime | None      # when the car was plugged in, if known
+    energy_kwh: float                 # delivered so far in this session
 
 
 class ChargerAdapter(ABC):
@@ -56,6 +69,11 @@ class ChargerAdapter(ABC):
     @abstractmethod
     def get_charger_state(self, charger_id: str) -> ChargerState:
         """Fetch the current state of a charger."""
+        ...
+
+    @abstractmethod
+    def get_connected_session(self, charger_id: str) -> ConnectedSession | None:
+        """The session for the car plugged in now, or None if there is none."""
         ...
 
     @abstractmethod

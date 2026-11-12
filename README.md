@@ -117,6 +117,41 @@ If a run fails, GitHub emails the repository owner. Each run also keeps a copy
 of the PDFs as a downloadable artifact for 90 days. Re-running a workflow sends
 the email again.
 
+## Charging reminder
+
+If a car is plugged in but hasn't started charging, the tenant gets an email.
+[deploy/github-actions/charge-reminder.yml](deploy/github-actions/charge-reminder.yml)
+runs at 41 minutes past each hour from midday to midnight, London time. Add it
+to the private repo next to the monthly statement workflow. It uses the same
+secrets and variables and needs no new ones.
+
+A reminder goes out when the charger has been in one of these states for over
+an hour and the session has delivered no energy (less than 0.1 kWh):
+
+| Easee op mode | Meaning | Reminder |
+|---|---|---|
+| 2 Awaiting Start | charger has not started supplying power | yes |
+| 6 Ready to Charge | charger offering power, car not taking it | yes |
+| 7 Awaiting Authentication | charge needs authorising (app or key tag) | yes |
+| 4 Completed | car has finished or paused itself | no |
+| 0, 1, 3, 5, 8 | offline, no car, charging, error, de-authenticating | no |
+
+There is also no reminder when the charger itself is holding off on purpose
+(reason-for-no-current 6, 54 or 76: Easee's own schedule, or its "fully
+charged" queue). A timer set in the car can't be seen through Easee, so the email
+says to ignore it if charging later was intended. Because the check runs
+hourly, the email arrives between one and two hours after plugging in.
+
+The tenant gets one email per plug-in. A record of the plug-ins already
+reminded is kept in the Actions cache, with separate copies for test and
+production. Scheduled runs follow `LIVE` as the statement workflow does, and
+manual runs default to `test`. To try it locally (this reports only and sends
+nothing):
+
+```powershell
+uv run python scripts/charge_reminder.py
+```
+
 ## Standalone Windows build
 
 For an end user with no Python installed, the same tool builds into a single
@@ -161,10 +196,12 @@ src/ocpp_garage/
   dlm/                    # dynamic load management
   models/                 # SQLAlchemy ORM models
   statement_cli.py        # statement tool (shared by script, .exe and CI)
+  charge_reminder.py      # "plugged in but not charging" reminder email
   billing/mailer.py       # statement email: recipients, message, SMTP
 scripts/
   discover_easee.py       # one-off: explore live API structure
   generate_statement.py   # entry point, also the frozen build's entry point
+  charge_reminder.py      # entry point for the hourly reminder
   build_exe.ps1           # builds the standalone Windows package
 statement.spec            # PyInstaller build definition
 deploy/github-actions/    # scheduled workflow, for the private ops repo

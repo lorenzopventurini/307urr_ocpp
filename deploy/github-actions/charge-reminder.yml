@@ -1,0 +1,145 @@
+# Hourly reminder: car plugged in but not charging.
+#
+# THIS FILE BELONGS IN THE SEPARATE PRIVATE REPOSITORY, at
+#   .github/workflows/charge-reminder.yml
+# alongside monthly-statement.yml, and uses the same secrets and variables.
+#
+# Every hour from midday to midnight (London time), checks the charger. If a
+# car has been plugged in for over an hour without taking any energy, the tenant
+# gets one email for that plug-in. A car that has finished charging, or is held
+# by the charger's own schedule, is left alone.
+#
+# Who receives the email:
+#   Scheduled runs  the tenant when the LIVE variable is "true", otherwise the
+#                   STATEMENT_TEST_RECIPIENT address, marked [TEST].
+#   Manual runs     whatever the "delivery" option says; test by default.
+#
+# Which plug-ins have already had a reminder is kept in reminder-state.json,
+# carried from run to run in the Actions cache (separately for test and
+# production, so a test run never stops a real reminder).
+
+name: Charging reminder
+
+on:
+  schedule:
+    # Cron runs in UTC. 11-23 UTC covers midday to midnight London time in both
+    # GMT and BST; the first step skips whichever run falls outside it.
+    - cron: "41 11-23 * * *"
+  workflow_dispatch:
+    inputs:
+      delivery:
+        description: "test = only the test address; production = the tenant"
+        type: choice
+        options:
+          - test
+          - production
+        default: test
+
+permissions:
+  contents: read
+
+concurrency:
+  group: charge-reminder
+  cancel-in-progress: false
+
+env:
+  DELIVERY: ${{ github.event_name == 'schedule' && (vars.LIVE == 'true' && 'production' || 'test') || inputs.delivery }}
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Only between midday and midnight, London time
+        id: window
+        run: |
+          hour=$(TZ=Europe/London date +%-H)
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$hour" -lt 12 ]; then
+            echo "It is ${hour}:xx in London - outside midday to midnight, nothing to do."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out the public code
+        if: steps.window.outputs.run == 'true'
+        uses: actions/checkout@v5
+        with:
+          repository: lorenzopventurini/307urr_ocpp
+          ref: ${{ vars.CODE_REF || 'main' }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        if: steps.window.outputs.run == 'true'
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        if: steps.window.outputs.run == 'true'
+        run: pip install --quiet .
+
+      - name: Write household configuration
+        if: steps.window.outputs.run == 'true'
+        env:
+          HOUSEHOLDS_TOML: ${{ secrets.HOUSEHOLDS_TOML }}
+        run: |
+          if [ -z "$HOUSEHOLDS_TOML" ]; then
+            echo "::error::The HOUSEHOLDS_TOML secret is not set."
+            exit 1
+          fi
+          printf '%s\n' "$HOUSEHOLDS_TOML" > households.toml
+
+      - name: Restore reminder history
+        if: steps.window.outputs.run == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: reminder-state.json
+          key: charge-reminder-${{ env.DELIVERY }}-${{ github.run_id }}
+          restore-keys: charge-reminder-${{ env.DELIVERY }}-
+
+      - name: Check the charger and remind
+        if: steps.window.outputs.run == 'true'
+        env:
+          TEST_RECIPIENT: ${{ vars.STATEMENT_TEST_RECIPIENT }}
+          EASEE_USERNAME: ${{ secrets.EASEE_USERNAME }}
+          EASEE_PASSWORD: ${{ secrets.EASEE_PASSWORD }}
+          EASEE_CHARGER_SERIAL: ${{ secrets.EASEE_CHARGER_SERIAL }}
+          SMTP_HOST: ${{ vars.SMTP_HOST }}
+          SMTP_PORT: ${{ vars.SMTP_PORT }}
+          SMTP_SECURITY: ${{ vars.SMTP_SECURITY }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_FROM: ${{ vars.EMAIL_FROM }}
+          EMAIL_FROM_NAME: ${{ vars.EMAIL_FROM_NAME }}
+          EMAIL_REPLY_TO: ${{ vars.EMAIL_REPLY_TO }}
+        run: |
+          case "$DELIVERY" in
+            production)
+              export STATEMENT_TEST_RECIPIENT=""
+              echo "Delivery: PRODUCTION - the tenant"
+              ;;
+            test)
+              if [ -z "$TEST_RECIPIENT" ]; then
+                echo "::error::Test delivery needs the STATEMENT_TEST_RECIPIENT variable."
+                exit 1
+              fi
+              export STATEMENT_TEST_RECIPIENT="$TEST_RECIPIENT"
+              echo "Delivery: TEST - test address only"
+              ;;
+            *)
+              echo "::error::Unknown delivery mode '$DELIVERY'."
+              exit 1
+              ;;
+          esac
+          python scripts/charge_reminder.py --email --after-hours 1 --state reminder-state.json
+
+      # Saved even after a failure, so a reminder already sent is not repeated.
+      - name: Save reminder history
+        if: always() && steps.window.outputs.run == 'true' && hashFiles('reminder-state.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: reminder-state.json
+          key: charge-reminder-${{ env.DELIVERY }}-${{ github.run_id }}

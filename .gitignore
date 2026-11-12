@@ -23,6 +23,7 @@ htmlcov/
 # Personal data — never commit
 households.toml
 statements/
+reminder_state.json
 
 # Database files
 *.db
