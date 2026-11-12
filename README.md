@@ -123,7 +123,9 @@ If a car is plugged in but hasn't started charging, the tenant gets an email.
 [deploy/github-actions/charge-reminder.yml](deploy/github-actions/charge-reminder.yml)
 runs at 41 minutes past each hour from midday to midnight, London time. Add it
 to the private repo next to the monthly statement workflow. It uses the same
-secrets and variables and needs no new ones.
+secrets and variables and needs no new ones. It checks out the
+`charging_notifications` branch rather than `main` (set the `REMINDER_CODE_REF`
+variable to change this), so the statement workflow is unaffected.
 
 A reminder goes out when the charger has been in one of these states for over
 an hour and the session has delivered no energy (less than 0.1 kWh):
