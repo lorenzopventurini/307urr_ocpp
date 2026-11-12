@@ -9,18 +9,18 @@ from ..base import ChargerAdapter, ChargerState, ChargerStatus, MeterReading, Se
 from .client import EaseeClient
 
 
-# Easee observation keys that map to charger status
+# Easee chargerOpMode values (enumeration 109), from
+# https://developer.easee.com/docs/enumerations
 _STATUS_MAP: dict[int, ChargerStatus] = {
-    1: ChargerStatus.OFFLINE,
-    2: ChargerStatus.OFFLINE,
-    3: ChargerStatus.AVAILABLE,
-    4: ChargerStatus.CHARGING,
-    5: ChargerStatus.CHARGING,
-    6: ChargerStatus.SUSPENDED,     # charging paused / ready
-    7: ChargerStatus.AVAILABLE,
-    8: ChargerStatus.OFFLINE,
-    9: ChargerStatus.FAULTED,
-    10: ChargerStatus.OFFLINE,
+    0: ChargerStatus.OFFLINE,                   # Offline
+    1: ChargerStatus.AVAILABLE,                 # Disconnected: no car connected
+    2: ChargerStatus.AWAITING_START,            # Awaiting Start (SuspendedEVSE)
+    3: ChargerStatus.CHARGING,                  # Charging
+    4: ChargerStatus.COMPLETED,                 # Completed: car paused or stopped charging
+    5: ChargerStatus.FAULTED,                   # Error
+    6: ChargerStatus.READY_TO_CHARGE,           # Ready to Charge (SuspendedEV)
+    7: ChargerStatus.AWAITING_AUTHENTICATION,   # Awaiting Authentication
+    8: ChargerStatus.DEAUTHENTICATING,          # De-authenticating
 }
 
 

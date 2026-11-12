@@ -7,9 +7,13 @@ from enum import Enum
 
 
 class ChargerStatus(str, Enum):
-    AVAILABLE = "available"
+    AVAILABLE = "available"                 # no car connected
+    AWAITING_START = "awaiting_start"       # car connected; charger holding (DLM, schedule)
+    AWAITING_AUTHENTICATION = "awaiting_authentication"  # car connected; needs authorising
     CHARGING = "charging"
-    SUSPENDED = "suspended"   # paused by DLM
+    READY_TO_CHARGE = "ready_to_charge"     # car connected; charger offering, car not taking
+    COMPLETED = "completed"                 # car connected; car paused or stopped charging
+    DEAUTHENTICATING = "deauthenticating"
     OFFLINE = "offline"
     FAULTED = "faulted"
     UNKNOWN = "unknown"
