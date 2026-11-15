@@ -9,8 +9,16 @@
 # gets one email for that plug-in. A car that has finished charging, or is held
 # by the charger's own schedule, is left alone.
 #
+# What starts it:
+#   An outside scheduler (cron-job.org) calls GitHub's API at 41 minutes past
+#   each hour, with delivery "auto". GitHub's own schedule is best effort: it
+#   skipped most hourly runs and started the rest up to 1.5 hours late, so it
+#   is kept only as an every-3-hours backup. If both run in one hour, the
+#   tenant still gets only one email.
+#
 # Who receives the email:
-#   Scheduled runs  the tenant when the LIVE variable is "true", otherwise the
+#   Scheduled runs, and delivery "auto"
+#                   the tenant when the LIVE variable is "true", otherwise the
 #                   STATEMENT_TEST_RECIPIENT address, marked [TEST].
 #   Manual runs     whatever the "delivery" option says; test by default.
 #
@@ -22,17 +30,18 @@ name: Charging reminder
 
 on:
   schedule:
-    # Cron runs in UTC. 11-23 UTC covers midday to midnight London time in both
-    # GMT and BST; the first step skips whichever run falls outside it.
-    - cron: "41 11-23 * * *"
+    # Backup only (see above). In UTC; within midday to midnight London time
+    # in both GMT and BST.
+    - cron: "41 12,15,18,21 * * *"
   workflow_dispatch:
     inputs:
       delivery:
-        description: "test = only the test address; production = the tenant"
+        description: "test = only the test address; production = the tenant; auto = as scheduled (follows LIVE)"
         type: choice
         options:
           - test
           - production
+          - auto
         default: test
 
 permissions:
@@ -43,7 +52,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  DELIVERY: ${{ github.event_name == 'schedule' && (vars.LIVE == 'true' && 'production' || 'test') || inputs.delivery }}
+  TIMED: ${{ github.event_name == 'schedule' || inputs.delivery == 'auto' }}
+  DELIVERY: ${{ (github.event_name == 'schedule' || inputs.delivery == 'auto') && (vars.LIVE == 'true' && 'production' || 'test') || inputs.delivery }}
 
 jobs:
   check:
@@ -54,13 +64,18 @@ jobs:
       - name: Only between midday and midnight, London time
         id: window
         run: |
+          # Applies to timed runs only; a manual test or production run always
+          # goes ahead. GitHub's own schedule can start a run well after its
+          # time, so for it a late run up to 02:00 still counts.
           hour=$(TZ=Europe/London date +%-H)
-          if [ "${{ github.event_name }}" = "schedule" ] && [ "$hour" -lt 12 ]; then
-            echo "It is ${hour}:xx in London - outside midday to midnight, nothing to do."
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=true" >> "$GITHUB_OUTPUT"
+          run=true
+          if [ "$TIMED" = "true" ] && [ "$hour" -lt 12 ]; then
+            if [ "${{ github.event_name }}" != "schedule" ] || [ "$hour" -ge 2 ]; then
+              run=false
+              echo "It is ${hour}:xx in London - outside midday to midnight, nothing to do."
+            fi
           fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
 
       - name: Check out the public code
         if: steps.window.outputs.run == 'true'
